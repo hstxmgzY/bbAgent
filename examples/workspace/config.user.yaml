@@ -1,0 +1,47 @@
+llm:
+  provider: openai
+  model: openai/gpt-4.1-mini
+  api_key: ${OPENAI_API_KEY}
+  temperature: 0.2
+  max_tokens: 2048
+
+default_agent: assistant
+
+channels:
+  enabled: false
+
+api:
+  host: 127.0.0.1
+  port: 8000
+
+research:
+  embedding:
+    provider: hashing
+    model: BAAI/bge-m3
+    batch_size: 32
+    normalize: true
+  vector_store:
+    provider: in_memory
+    mode: local
+    path: .research/qdrant
+  metadata_store:
+    url: sqlite:///.research/research.db
+  retrieval:
+    candidate_k: 30
+    top_k: 8
+    max_per_source: 2
+  memory:
+    enabled: true
+    max_related_runs: 5
+    default_ttl_hours: 168
+    official_ttl_hours: 720
+    volatile_ttl_hours: 6
+  citation_evaluation:
+    enabled: true
+    verifier: rules
+    min_coverage: 0.85
+    min_support_rate: 0.80
+    max_repairs: 1
+  telemetry:
+    enabled: true
+    service_name: mybot-research
