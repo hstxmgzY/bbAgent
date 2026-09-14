@@ -2,10 +2,23 @@
 
 import asyncio
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+import inspect
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from mybot.core.agent import AgentSession
+
+
+@dataclass(frozen=True)
+class ToolExecutionContext:
+    """Stable runtime identity for one model tool call."""
+
+    session_id: str
+    turn_id: str
+    tool_call_id: str
+    agent_id: str
+    source: str
 
 
 class BaseTool(ABC):
@@ -16,7 +29,12 @@ class BaseTool(ABC):
     parameters: dict[str, Any]  # JSON Schema for function calling
 
     @abstractmethod
-    async def execute(self, session: "AgentSession", **kwargs: Any) -> str:
+    async def execute(
+        self,
+        session: "AgentSession",
+        execution_context: ToolExecutionContext | None = None,
+        **kwargs: Any,
+    ) -> str:
         """Execute the tool."""
 
     def get_tool_schema(self) -> dict[str, Any]:
@@ -54,9 +72,19 @@ class FunctionTool(BaseTool):
         self.description = description
         self.parameters = parameters
         self._func = func
+        self._accepts_execution_context = (
+            "execution_context" in inspect.signature(func).parameters
+        )
 
-    async def execute(self, session: "AgentSession", **kwargs: Any) -> str:
+    async def execute(
+        self,
+        session: "AgentSession",
+        execution_context: ToolExecutionContext | None = None,
+        **kwargs: Any,
+    ) -> str:
         """Execute the underlying function."""
+        if self._accepts_execution_context:
+            kwargs["execution_context"] = execution_context
         result = self._func(session=session, **kwargs)
         if asyncio.iscoroutine(result):
             result = await result

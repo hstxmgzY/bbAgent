@@ -53,9 +53,12 @@ class HistoryMessage(BaseModel):
     content: str
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def from_message(cls, message: Message) -> "HistoryMessage":
+    def from_message(
+        cls, message: Message, metadata: dict[str, Any] | None = None
+    ) -> "HistoryMessage":
         """Create HistoryMessage from litellm Message format."""
         tool_calls = None
         if message.get("tool_calls"):
@@ -75,6 +78,7 @@ class HistoryMessage(BaseModel):
             content=str(message.get("content", "")),
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
+            metadata=metadata or {},
         )
 
     def to_message(self) -> Message:

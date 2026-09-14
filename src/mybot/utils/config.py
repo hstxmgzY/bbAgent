@@ -79,6 +79,37 @@ class ApiConfig(BaseModel):
 
     host: str = "127.0.0.1"
     port: int = Field(default=8000, gt=0, lt=65536)
+    websocket_auth_secret: SecretStr | None = None
+
+
+class DispatchConfig(BaseModel):
+    """Persistent subagent dispatch configuration."""
+
+    store_url: str = "sqlite:///.event/dispatch.db"
+    scan_interval_seconds: float = Field(default=1.0, gt=0, le=60)
+    lease_seconds: float = Field(default=60.0, gt=0, le=3600)
+    default_execution_timeout_seconds: float = Field(default=3600.0, gt=0)
+    sync_wait_seconds: float = Field(default=20.0, ge=0, le=3600)
+    cancel_on_sync_timeout: bool = False
+    max_pending_jobs_per_session: int = Field(default=10, ge=1)
+    max_queued_jobs_per_agent: int = Field(default=100, ge=1)
+    max_request_bytes: int = Field(default=262144, ge=1)
+    max_result_bytes: int = Field(default=1048576, ge=128)
+    job_retention_hours: int = Field(default=168, ge=1)
+    poll_min_interval_seconds: float = Field(default=5.0, ge=0)
+    outbox_max_attempts: int = Field(default=20, ge=1)
+    max_tool_rounds_per_turn: int = Field(default=12, ge=1, le=100)
+
+    @field_validator("store_url")
+    @classmethod
+    def must_be_sqlite(cls, value: str) -> str:
+        if not value.startswith("sqlite:///"):
+            raise ValueError("dispatch.store_url must use sqlite:///")
+        return value
+
+    def path(self, workspace: Path) -> Path:
+        value = Path(self.store_url.removeprefix("sqlite:///"))
+        return value if value.is_absolute() else workspace / value
 
 
 class ResearchEmbeddingConfig(BaseModel):
@@ -189,6 +220,7 @@ class Config(BaseModel):
     webread: Crawl4AIWebReadConfig | None = None
     channels: ChannelConfig = Field(default_factory=ChannelConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
+    dispatch: DispatchConfig = Field(default_factory=DispatchConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
     sources: dict[str, SourceSessionConfig] = Field(default_factory=dict)
     routing: dict = Field(default_factory=lambda: {"bindings": []})

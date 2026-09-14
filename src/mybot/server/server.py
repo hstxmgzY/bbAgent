@@ -13,6 +13,11 @@ from .delivery_worker import DeliveryWorker
 from .channel_worker import ChannelWorker
 from .websocket_worker import WebSocketWorker
 from .app import create_app
+from .dispatch_worker import (
+    CompletionOutboxWorker,
+    CompletionRouter,
+    DispatchJobWorker,
+)
 from mybot.utils.config import ConfigReloader
 
 if TYPE_CHECKING:
@@ -57,6 +62,9 @@ class Server:
         self.workers = [
             self.context.eventbus,  # EventBus (active worker)
             AgentWorker(self.context),  # SubscriberWorker
+            DispatchJobWorker(self.context),
+            CompletionOutboxWorker(self.context),
+            CompletionRouter(self.context),
             DeliveryWorker(self.context),  # SubscriberWorker
             CronWorker(self.context),  # Background worker for scheduled tasks
             ws_worker,  # WebSocketWorker (SubscriberWorker)
@@ -105,6 +113,7 @@ class Server:
         if self.config_reloader is not None:
             self.config_reloader.stop()
         await self.context.research_service.close()
+        self.context.dispatch_repository.close()
 
     async def _run_api(self) -> None:
         """Run the WebSocket API server."""

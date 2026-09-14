@@ -1,8 +1,11 @@
 """Built-in slash command handlers."""
 
 import re
+import json
 from typing import TYPE_CHECKING
 
+from mybot.core.dispatch_jobs import DispatchJobError
+from mybot.core.events import AgentEventSource, CancelDispatchEvent
 from mybot.core.commands.base import Command
 from mybot.utils.def_loader import DefNotFoundError
 
@@ -249,3 +252,67 @@ class BindingsCommand(Command):
             lines.append(f"- `{binding['value']}` → `{binding['agent']}`")
 
         return "\n".join(lines)
+
+
+class JobsCommand(Command):
+    """List persistent subagent jobs owned by this session."""
+
+    name = "jobs"
+    description = "List recent subagent jobs"
+
+    async def execute(self, args: str, session: "AgentSession") -> str:
+        jobs = session.shared_context.dispatch_service.list_jobs(session.session_id)
+        if not jobs:
+            return "No subagent jobs."
+        return "\n".join(
+            f"- `{job.job_id}` {job.status} -> `{job.target_agent_id}`" for job in jobs
+        )
+
+
+class JobCommand(Command):
+    """Show one persistent subagent job."""
+
+    name = "job"
+    description = "Show a subagent job: /job <id>"
+
+    async def execute(self, args: str, session: "AgentSession") -> str:
+        job_id = args.strip()
+        if not job_id:
+            return "**Usage:** `/job <id>`"
+        try:
+            result = session.shared_context.dispatch_service.status(
+                job_id, session.session_id
+            )
+        except DispatchJobError as exc:
+            result = {"ok": False, "error": exc.to_dict()}
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+class CancelJobCommand(Command):
+    """Cancel one persistent subagent job."""
+
+    name = "cancel"
+    description = "Cancel a subagent job: /cancel <id>"
+
+    async def execute(self, args: str, session: "AgentSession") -> str:
+        job_id = args.strip()
+        if not job_id:
+            return "**Usage:** `/cancel <id>`"
+        try:
+            job = session.shared_context.dispatch_service.cancel(
+                job_id, session.session_id
+            )
+            if job.status == "cancel_requested":
+                await session.shared_context.eventbus.publish(
+                    CancelDispatchEvent(
+                        session_id=job.child_session_id,
+                        source=AgentEventSource(session.agent.agent_def.id),
+                        content="cancellation requested",
+                        job_id=job.job_id,
+                    )
+                )
+            result = session.shared_context.dispatch_service.job_result(job)
+            result["ok"] = True
+        except DispatchJobError as exc:
+            result = {"ok": False, "error": exc.to_dict()}
+        return json.dumps(result, ensure_ascii=False, indent=2)

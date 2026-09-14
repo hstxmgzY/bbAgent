@@ -1,8 +1,8 @@
 """Agent definition loader."""
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from mybot.utils.config import Config, LLMConfig
 from mybot.utils.def_loader import (
@@ -27,6 +27,22 @@ class AgentDef(BaseModel):
     tools: list[str] = Field(default_factory=list)
     dispatch_to: list[str] = Field(default_factory=list)
     dispatch_timeout_seconds: float = Field(default=120.0, gt=0, le=3600)
+    dispatch_completion_modes: list[Literal["poll", "notify", "resume_parent"]] = Field(
+        default_factory=lambda: ["poll"]
+    )
+    default_dispatch_completion_mode: Literal["poll", "notify", "resume_parent"] = (
+        "poll"
+    )
+    dispatch_execution_timeout_seconds: float = Field(default=3600.0, gt=0)
+    retry_safe: bool = False
+
+    @model_validator(mode="after")
+    def validate_dispatch_defaults(self) -> "AgentDef":
+        if self.default_dispatch_completion_mode not in self.dispatch_completion_modes:
+            raise ValueError(
+                "default_dispatch_completion_mode must be in dispatch_completion_modes"
+            )
+        return self
 
 
 class AgentLoader:
@@ -87,6 +103,17 @@ class AgentLoader:
                 dispatch_timeout_seconds=frontmatter.get(
                     "dispatch_timeout_seconds", 120.0
                 ),
+                dispatch_completion_modes=frontmatter.get(
+                    "dispatch_completion_modes", ["poll"]
+                ),
+                default_dispatch_completion_mode=frontmatter.get(
+                    "default_dispatch_completion_mode", "poll"
+                ),
+                dispatch_execution_timeout_seconds=frontmatter.get(
+                    "dispatch_execution_timeout_seconds",
+                    self.config.dispatch.default_execution_timeout_seconds,
+                ),
+                retry_safe=frontmatter.get("retry_safe", False),
             )
         except ValidationError as e:
             raise InvalidDefError("agent", def_id, str(e))

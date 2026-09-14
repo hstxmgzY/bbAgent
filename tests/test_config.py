@@ -21,3 +21,4 @@ default_agent: assistant
     assert config.research.metadata_store.path(tmp_path) == (
         tmp_path / ".research/research.db"
     )
+    assert config.dispatch.path(tmp_path) == tmp_path / ".event/dispatch.db"

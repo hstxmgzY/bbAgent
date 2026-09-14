@@ -6,6 +6,11 @@ from .websocket_worker import WebSocketWorker
 from .agent_worker import AgentWorker
 from .cron_worker import CronWorker
 from .channel_worker import ChannelWorker
+from .dispatch_worker import (
+    CompletionOutboxWorker,
+    CompletionRouter,
+    DispatchJobWorker,
+)
 
 __all__ = [
     "Worker",
@@ -15,4 +20,7 @@ __all__ = [
     "AgentWorker",
     "CronWorker",
     "ChannelWorker",
+    "DispatchJobWorker",
+    "CompletionOutboxWorker",
+    "CompletionRouter",
 ]

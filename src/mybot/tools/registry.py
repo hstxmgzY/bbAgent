@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-from mybot.tools.base import BaseTool
+from mybot.tools.base import BaseTool, ToolExecutionContext
 from mybot.tools.builtin_tools import bash, edit_file, read_file, write_file
 
 if TYPE_CHECKING:
@@ -34,14 +34,20 @@ class ToolRegistry:
         return [tool.get_tool_schema() for tool in self._tools.values()]
 
     async def execute_tool(
-        self, name: str, session: "AgentSession", **kwargs: Any
+        self,
+        name: str,
+        session: "AgentSession",
+        execution_context: ToolExecutionContext | None = None,
+        **kwargs: Any,
     ) -> str:
         """Execute a tool by name."""
         tool = self.get(name)
         if tool is None:
             raise ValueError(f"Tool not found: {name}")
 
-        return await tool.execute(session=session, **kwargs)
+        return await tool.execute(
+            session=session, execution_context=execution_context, **kwargs
+        )
 
     @classmethod
     def with_builtins(cls, allowed: Iterable[str] = ()) -> "ToolRegistry":

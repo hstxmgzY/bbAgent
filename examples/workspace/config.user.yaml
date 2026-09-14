@@ -13,6 +13,22 @@ channels:
 api:
   host: 127.0.0.1
   port: 8000
+  # websocket_auth_secret signs each source with HMAC-SHA256 before push is enabled.
+  # websocket_auth_secret: ${MYBOT_WS_AUTH_SECRET}
+
+dispatch:
+  store_url: sqlite:///.event/dispatch.db
+  scan_interval_seconds: 1
+  lease_seconds: 60
+  default_execution_timeout_seconds: 3600
+  sync_wait_seconds: 20
+  cancel_on_sync_timeout: false
+  max_pending_jobs_per_session: 10
+  max_queued_jobs_per_agent: 100
+  max_result_bytes: 1048576
+  job_retention_hours: 168
+  poll_min_interval_seconds: 5
+  outbox_max_attempts: 20
 
 research:
   embedding:

@@ -169,6 +169,7 @@ class OutboundEvent(Event):
     """Event for agent responses to deliver to platforms."""
 
     error: str | None = None
+    event_id: str = ""
 
 
 @dataclass
@@ -195,6 +196,24 @@ class CancelDispatchEvent(Event):
     job_id: str = ""
 
 
+@dataclass
+class DispatchQueuedEvent(Event):
+    """Best-effort wake-up hint for a job already persisted in JobStore."""
+
+    job_id: str = ""
+
+
+@dataclass
+class JobCompletedEvent(Event):
+    """Persistent-outbox notification that a dispatch job became terminal."""
+
+    event_id: str = ""
+    job_id: str = ""
+    child_session_id: str = ""
+    status: str = ""
+    result_ref: str = ""
+
+
 # Registry mapping event class names to event classes
 _EVENT_CLASSES: dict[str, type[Event]] = {
     "InboundEvent": InboundEvent,
@@ -202,6 +221,8 @@ _EVENT_CLASSES: dict[str, type[Event]] = {
     "DispatchEvent": DispatchEvent,
     "DispatchResultEvent": DispatchResultEvent,
     "CancelDispatchEvent": CancelDispatchEvent,
+    "DispatchQueuedEvent": DispatchQueuedEvent,
+    "JobCompletedEvent": JobCompletedEvent,
 }
 
 

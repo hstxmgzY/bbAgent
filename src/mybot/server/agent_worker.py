@@ -18,6 +18,7 @@ from mybot.utils.def_loader import DefNotFoundError
 
 if TYPE_CHECKING:
     from mybot.core.context import SharedContext
+    from mybot.core.context import ReentrantAsyncSemaphore
     from mybot.core.agent_loader import AgentDef
 
 
@@ -38,7 +39,6 @@ class AgentWorker(SubscriberWorker):
 
     def __init__(self, context: "SharedContext"):
         super().__init__(context)
-        self._semaphores: dict[str, asyncio.Semaphore] = {}
         self._execution_tasks: set[asyncio.Task[None]] = set()
         self._dispatch_tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -98,6 +98,8 @@ class AgentWorker(SubscriberWorker):
         session_id = event.session_id
 
         async with sem:
+            session_lock = self.context.session_lock(session_id)
+            await session_lock.acquire()
             try:
                 agent = Agent(agent_def, self.context)
                 if session_id:
@@ -143,6 +145,8 @@ class AgentWorker(SubscriberWorker):
                     agent_id=agent_def.id,
                     error=str(e),
                 )
+            finally:
+                session_lock.release()
 
         self._maybe_cleanup_semaphores(agent_def)
 
@@ -171,24 +175,14 @@ class AgentWorker(SubscriberWorker):
             )
         await self.context.eventbus.publish(result_event)
 
-    def _get_or_create_semaphore(self, agent_def: "AgentDef") -> asyncio.Semaphore:
+    def _get_or_create_semaphore(
+        self, agent_def: "AgentDef"
+    ) -> "ReentrantAsyncSemaphore":
         """Get existing or create new semaphore for agent."""
-        if agent_def.id not in self._semaphores:
-            self._semaphores[agent_def.id] = asyncio.Semaphore(
-                agent_def.max_concurrency
-            )
-            logger.debug(
-                f"Created semaphore for {agent_def.id} with value {agent_def.max_concurrency}"
-            )
-        return self._semaphores[agent_def.id]
+        return self.context.agent_semaphore(agent_def.id, agent_def.max_concurrency)
 
     def _maybe_cleanup_semaphores(self, agent_def: "AgentDef") -> None:
-        """Remove semaphores for certain agents."""
-        if agent_def.id not in self._semaphores:
-            return
-
-        if not self._semaphores[agent_def.id]._waiters:
-            del self._semaphores[agent_def.id]
+        """Shared semaphores live for the context lifetime."""
 
     async def stop(self) -> None:
         """Cancel all detached session tasks before stopping the subscriber."""

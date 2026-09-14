@@ -3,7 +3,7 @@ import json
 
 from mybot.core.agent import Agent
 from mybot.core.context import SharedContext
-from mybot.core.events import CliEventSource, DispatchResultEvent
+from mybot.core.events import CliEventSource
 from mybot.tools.subagent_tool import create_subagent_dispatch_tool
 from mybot.utils.config import Config, LLMConfig
 
@@ -54,7 +54,7 @@ def test_agent_registers_only_allowlisted_tools(tmp_path):
     assert researcher_tools == {"research"}
 
 
-def test_dispatch_timeout_is_structured_and_unsubscribes(tmp_path):
+def test_dispatch_sync_wait_returns_accepted_without_cancelling(tmp_path):
     context = make_context(tmp_path)
     parent = Agent(context.agent_loader.load("assistant"), context).new_session(
         CliEventSource()
@@ -67,6 +67,7 @@ def test_dispatch_timeout_is_structured_and_unsubscribes(tmp_path):
     raw = asyncio.run(dispatch.execute(parent, agent_id="researcher", task="research"))
     result = json.loads(raw)
 
-    assert result["ok"] is False
-    assert result["error"]["code"] == "timeout"
-    assert not context.eventbus._subscribers[DispatchResultEvent]
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["status"] == "queued"
+    assert context.dispatch_repository.get_job(result["job_id"]).status == "queued"

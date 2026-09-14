@@ -19,7 +19,13 @@ from mybot.acp.source import AcpEventSource
 from mybot.core.agent import Agent, AgentSession
 from mybot.core.context import SharedContext
 from mybot.core.history import HistoryMessage
-from mybot.server import AgentWorker, Worker
+from mybot.server import (
+    AgentWorker,
+    CompletionOutboxWorker,
+    CompletionRouter,
+    DispatchJobWorker,
+    Worker,
+)
 from mybot.utils.config import Config
 
 JSON = dict[str, Any]
@@ -44,6 +50,9 @@ class AcpRuntime:
         self.workers = [
             self.context.eventbus,
             AgentWorker(self.context),
+            DispatchJobWorker(self.context),
+            CompletionOutboxWorker(self.context),
+            CompletionRouter(self.context),
         ]
 
     def start(self) -> None:
@@ -53,6 +62,7 @@ class AcpRuntime:
     async def stop(self) -> None:
         for worker in self.workers:
             await worker.stop()
+        self.context.dispatch_repository.close()
 
     def new_session(self, cwd: Path, agent_id: str | None = None) -> AgentSession:
         session_id = str(uuid.uuid4())

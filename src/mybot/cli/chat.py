@@ -17,6 +17,9 @@ from mybot.core.events import (
 )
 from mybot.server import (
     AgentWorker,
+    CompletionOutboxWorker,
+    CompletionRouter,
+    DispatchJobWorker,
     Worker,
 )
 from mybot.utils.config import Config, ConfigReloader
@@ -35,6 +38,9 @@ class ChatLoop:
         self.workers: list[Worker] = [
             self.context.eventbus,
             AgentWorker(self.context),
+            DispatchJobWorker(self.context),
+            CompletionOutboxWorker(self.context),
+            CompletionRouter(self.context),
         ]
 
         self.response_queue: asyncio.Queue[OutboundEvent] = asyncio.Queue()
@@ -45,7 +51,10 @@ class ChatLoop:
 
     async def handle_outbound_event(self, event: OutboundEvent) -> None:
         """Handle outbound events by adding to response queue."""
-        await self.response_queue.put(event)
+        if event.event_id:
+            self.display_agent_response(event.content)
+        else:
+            await self.response_queue.put(event)
         self.context.eventbus.ack(event)
 
     def get_user_input(self) -> str:
@@ -114,6 +123,7 @@ class ChatLoop:
             for worker in self.workers:
                 await worker.stop()
             self.config_reloader.stop()
+            self.context.dispatch_repository.close()
 
 
 def chat_command(ctx: typer.Context, agent_id: str | None = None) -> None:

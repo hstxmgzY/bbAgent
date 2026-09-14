@@ -17,6 +17,12 @@ from mybot.tools.webread_tool import create_webread_tool
 from mybot.tools.post_message_tool import create_post_message_tool
 from mybot.tools.research_tool import create_research_tool
 from mybot.tools.subagent_tool import create_subagent_dispatch_tool
+from mybot.tools.subagent_tool import (
+    create_subagent_cancel_tool,
+    create_subagent_status_tool,
+    create_subagent_submit_tool,
+)
+from mybot.tools.base import ToolExecutionContext
 
 from litellm.types.completion import (
     ChatCompletionMessageParam as Message,
@@ -73,9 +79,29 @@ class Agent:
                 self.context,
                 dispatch_to=self.agent_def.dispatch_to,
                 timeout_seconds=self.agent_def.dispatch_timeout_seconds,
+                cancel_on_sync_timeout=(
+                    self.context.config.dispatch.cancel_on_sync_timeout
+                ),
             )
             if subagent_tool:
                 registry.register(subagent_tool)
+
+        if "subagent_submit" in enabled and self.agent_def.dispatch_to:
+            submit_tool = create_subagent_submit_tool(
+                self.agent_def.id,
+                self.context,
+                dispatch_to=self.agent_def.dispatch_to,
+                default_completion_mode=self.agent_def.default_dispatch_completion_mode,
+                completion_modes=self.agent_def.dispatch_completion_modes,
+            )
+            if submit_tool:
+                registry.register(submit_tool)
+
+        if "subagent_status" in enabled:
+            registry.register(create_subagent_status_tool(self.context))
+
+        if "subagent_cancel" in enabled:
+            registry.register(create_subagent_cancel_tool(self.context))
 
         return registry
 
@@ -191,11 +217,80 @@ class AgentSession:
 
     async def chat(self, message: str) -> str:
         """Send a message to the LLM and get a response."""
-        user_msg: Message = {"role": "user", "content": message}
-        self.state.add_message(user_msg)
+        gate = self.shared_context.agent_semaphore(
+            self.agent.agent_def.id, self.agent.agent_def.max_concurrency
+        )
+        async with gate:
+            async with self.shared_context.session_lock(self.session_id):
+                user_msg: Message = {"role": "user", "content": message}
+                self.state.add_message(user_msg)
+                return await self._run_turn(str(uuid.uuid4()))
+
+    async def resume_with_dispatch_result(
+        self, *, event_id: str, job_id: str, result: str
+    ) -> str:
+        """Run a new parent turn from an auditable synthetic tool result."""
+        gate = self.shared_context.agent_semaphore(
+            self.agent.agent_def.id, self.agent.agent_def.max_concurrency
+        )
+        async with gate:
+            async with self.shared_context.session_lock(self.session_id):
+                tool_call_id = f"dispatch-result-{event_id}"
+                metadata = {"event_id": event_id, "job_id": job_id, "synthetic": True}
+                history = self.shared_context.history_store.get_messages(
+                    self.session_id
+                )
+                for message in reversed(history):
+                    if (
+                        message.metadata.get("event_id") == event_id
+                        and message.metadata.get("resume_completed") is True
+                    ):
+                        return message.content
+                if not any(
+                    message.metadata.get("event_id") == event_id
+                    and message.metadata.get("synthetic") is True
+                    for message in history
+                ):
+                    assistant_msg: Message = {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": "subagent_result_ready",
+                                    "arguments": json.dumps({"job_id": job_id}),
+                                },
+                            }
+                        ],
+                    }
+                    tool_msg: Message = {
+                        "role": "tool",
+                        "content": result,
+                        "tool_call_id": tool_call_id,
+                    }
+                    self.state.add_message(assistant_msg, metadata=metadata)
+                    self.state.add_message(tool_msg, metadata=metadata)
+                return await self._run_turn(
+                    str(uuid.uuid4()),
+                    response_metadata={
+                        "event_id": event_id,
+                        "job_id": job_id,
+                        "resume_completed": True,
+                    },
+                )
+
+    async def _run_turn(
+        self,
+        turn_id: str,
+        response_metadata: dict[str, object] | None = None,
+    ) -> str:
+        """Run one serialized model turn after its initiating messages are stored."""
 
         tool_schemas = self.tools.get_tool_schemas()
         logger = logging.getLogger(__name__)
+        tool_rounds = 0
 
         while True:
             self.state = await self.context_guard.check_and_compact(self.state)
@@ -219,10 +314,36 @@ class AgentSession:
             if tool_call_dicts:
                 assistant_msg["tool_calls"] = tool_call_dicts
 
-            self.state.add_message(assistant_msg)
+            final_response = stop_reason != "tool_calls"
+            self.state.add_message(
+                assistant_msg,
+                metadata=response_metadata if final_response else None,
+            )
 
             if stop_reason == "tool_calls":
-                await self._handle_tool_calls(tool_calls)
+                tool_rounds += 1
+                if (
+                    tool_rounds
+                    > self.shared_context.config.dispatch.max_tool_rounds_per_turn
+                ):
+                    for tool_call in tool_calls:
+                        self.state.add_message(
+                            {
+                                "role": "tool",
+                                "content": json.dumps(
+                                    {
+                                        "ok": False,
+                                        "error": {
+                                            "code": "tool_round_limit",
+                                            "message": "maximum tool rounds reached",
+                                        },
+                                    }
+                                ),
+                                "tool_call_id": tool_call.id,
+                            }
+                        )
+                    return "Maximum tool rounds reached for this turn."
+                await self._handle_tool_calls(tool_calls, turn_id)
                 continue
 
             if stop_reason == "length":
@@ -242,10 +363,11 @@ class AgentSession:
     async def _handle_tool_calls(
         self,
         tool_calls: list["LLMToolCall"],
+        turn_id: str,
     ) -> None:
         """Handle tool calls from the LLM response."""
         tool_call_results = await asyncio.gather(
-            *[self._execute_tool_call(tool_call) for tool_call in tool_calls]
+            *[self._execute_tool_call(tool_call, turn_id) for tool_call in tool_calls]
         )
 
         for tool_call, result in zip(tool_calls, tool_call_results):
@@ -259,6 +381,7 @@ class AgentSession:
     async def _execute_tool_call(
         self,
         tool_call: "LLMToolCall",
+        turn_id: str,
     ) -> str:
         """Execute a single tool call."""
         # Extract key arguments
@@ -268,7 +391,19 @@ class AgentSession:
             args = {}
 
         try:
-            result = await self.tools.execute_tool(tool_call.name, session=self, **args)
+            execution_context = ToolExecutionContext(
+                session_id=self.session_id,
+                turn_id=turn_id,
+                tool_call_id=tool_call.id,
+                agent_id=self.agent.agent_def.id,
+                source=str(self.source),
+            )
+            result = await self.tools.execute_tool(
+                tool_call.name,
+                session=self,
+                execution_context=execution_context,
+                **args,
+            )
         except Exception as e:
             result = f"Error executing tool: {e}"
 
